@@ -32,7 +32,7 @@
                 >✍ Write a Review</RouterLink>
                 <RouterLink
                   v-else
-                  :to="`/review/edit/${userReview.id}`"
+                  :to="{ path: `/review/edit/${userReview.id}`, query: { type: media.type || 'movie' } }"
                   class="cl-btn cl-btn-ghost w-100"
                 >✍ Edit Your Review</RouterLink>
               </template>
@@ -62,8 +62,12 @@
             <div class="d-flex align-items-center gap-3 flex-wrap mb-3">
               <div class="d-flex align-items-baseline gap-1">
                 <span class="cl-accent">★</span>
-                <span class="rating-value cl-accent">{{ displayRating }}</span>
+                <span class="rating-value cl-accent">{{ combinedRating }}</span>
                 <span class="cl-dim small">/10</span>
+              </div>
+              <div class="d-flex gap-2 flex-wrap align-items-center">
+                <span class="cl-muted small">TMDB: {{ apiRatingDisplay }}/10</span>
+                <span v-if="reviewRatingDisplay" class="cl-muted small">Reviews: {{ reviewRatingDisplay }}/10</span>
               </div>
               <span class="cl-muted small">
                 {{ reviews.length }} {{ reviews.length === 1 ? 'review' : 'reviews' }}
@@ -199,7 +203,7 @@ const inWatchlist = computed(() =>
 
 const reviews = computed(() => {
   if (!media.value) return []
-  return mediaStore.getReviewsByMediaId(media.value.id)
+  return mediaStore.getReviewsByMediaId(media.value.id, media.value.type)
 })
 
 const userReview = computed(() => {
@@ -208,11 +212,23 @@ const userReview = computed(() => {
 })
 const hasUserReviewed = computed(() => userReview.value !== null)
 
-// Show the local average if we have reviews, otherwise fall back to TMDB's rating.
-const displayRating = computed(() => {
-  if (reviews.value.length === 0) return media.value?.rating?.toFixed(1) ?? '–'
+const apiRating = computed(() => media.value?.rating ?? null)
+const apiRatingDisplay = computed(() => apiRating.value !== null ? apiRating.value.toFixed(1) : '–')
+
+const reviewRating = computed(() => {
+  if (reviews.value.length === 0) return null
   const sum = reviews.value.reduce((acc, r) => acc + r.rating, 0)
-  return (sum / reviews.value.length).toFixed(1)
+  return sum / reviews.value.length
+})
+const reviewRatingDisplay = computed(() =>
+  reviewRating.value !== null ? reviewRating.value.toFixed(1) : null
+)
+
+const combinedRating = computed(() => {
+  if (apiRating.value === null) return '–'
+  if (reviewRating.value === null) return apiRating.value.toFixed(1)
+  const combined = apiRating.value * 0.7 + reviewRating.value * 0.3
+  return combined.toFixed(1)
 })
 
 const sortedReviews = computed(() => {
@@ -273,7 +289,7 @@ async function loadMedia() {
 async function loadReviews() {
   loadingReviews.value = true
   try {
-    await mediaStore.fetchReviewsByMediaId(mediaId.value)
+    await mediaStore.fetchReviewsByMediaId(mediaId.value, mediaType.value)
   } catch (err) {
     console.error('Could not load reviews:', err)
   } finally {

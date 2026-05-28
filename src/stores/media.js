@@ -47,11 +47,46 @@ export const useMediaStore = defineStore('media', () => {
   }
 
   //  LOADERS 
+  async function loadReviewStatsForMovies(movieIds = []) {
+    if (!movieIds?.length) return
+
+    const stats = await Promise.all(
+      movieIds.map(async id => {
+        try {
+          const res = await fetch(`${API}/reviews/stats/${id}`)
+          if (!res.ok) return null
+          return await res.json()
+        } catch (err) {
+          console.error('Failed to load review stats for media', id, err)
+          return null
+        }
+      })
+    )
+
+    stats.forEach(stat => {
+      if (!stat) return
+
+      const movie = movies.value.find(m => Number(m.id) === Number(stat.mediaId))
+      if (movie) {
+        movie.reviewCount = stat.count
+        movie.reviewAverage = stat.averageRating
+      }
+
+      Object.values(detailCache.value).forEach(cached => {
+        if (Number(cached.id) === Number(stat.mediaId)) {
+          cached.reviewCount = stat.count
+          cached.reviewAverage = stat.averageRating
+        }
+      })
+    })
+  }
+
   async function loadTrending() {
     loading.value = true
     error.value = ''
     try {
       movies.value = await fetchTrending()
+      await loadReviewStatsForMovies(movies.value.map(m => m.id))
     } catch (e) {
       error.value = 'Failed to load trending titles.'
       console.error(e)
@@ -67,12 +102,14 @@ export const useMediaStore = defineStore('media', () => {
       if (type === 'movie') {
         const data = await fetchPopularMovies(page)
         movies.value = data.results
+        await loadReviewStatsForMovies(movies.value.map(m => m.id))
         return data.totalPages
       }
 
       if (type === 'tv') {
         const data = await fetchPopularTV(page)
         movies.value = data.results
+        await loadReviewStatsForMovies(movies.value.map(m => m.id))
         return data.totalPages
       }
 
@@ -84,6 +121,7 @@ export const useMediaStore = defineStore('media', () => {
       movies.value = [...mv.results, ...tv.results]
         .sort((a, b) => b.rating - a.rating)
 
+      await loadReviewStatsForMovies(movies.value.map(m => m.id))
       return Math.max(mv.totalPages, tv.totalPages)
 
     } catch (e) {
@@ -104,6 +142,7 @@ export const useMediaStore = defineStore('media', () => {
         : await discoverMedia(filters, page)
 
       movies.value = data.results
+      await loadReviewStatsForMovies(movies.value.map(m => m.id))
       return data.totalPages
     } catch (e) {
       error.value = 'Search failed. Please try again.'
@@ -158,14 +197,20 @@ export const useMediaStore = defineStore('media', () => {
   }
 
   //  REVIEWS 
-  async function fetchReviewsByMediaId(mediaId) {
+  async function fetchReviewsByMediaId(mediaId, mediaType = null) {
     try {
-      const res = await fetch(`${API}/reviews?mediaId=${mediaId}`)
+      const params = new URLSearchParams({ mediaId: String(mediaId) })
+      if (mediaType) params.set('mediaType', mediaType)
+      const res = await fetch(`${API}/reviews?${params}`)
       const data = await res.json()
 
       if (res.ok) {
         reviews.value = [
-          ...reviews.value.filter(r => r.mediaId !== Number(mediaId)),
+          ...reviews.value.filter(r => {
+            if (Number(r.mediaId) !== Number(mediaId)) return true
+            if (!mediaType || !r.mediaType) return false
+            return r.mediaType !== mediaType
+          }),
           ...data.reviews,
         ]
       }
@@ -174,10 +219,12 @@ export const useMediaStore = defineStore('media', () => {
     }
   }
 
-  function getReviewsByMediaId(mediaId) {
-    return reviews.value.filter(
-      r => Number(r.mediaId) === Number(mediaId)
-    )
+  function getReviewsByMediaId(mediaId, mediaType = null) {
+    return reviews.value.filter(r => {
+      if (Number(r.mediaId) !== Number(mediaId)) return false
+      if (mediaType && r.mediaType && r.mediaType !== mediaType) return false
+      return true
+    })
   }
 
   async function addReview(reviewData) {
@@ -188,7 +235,12 @@ export const useMediaStore = defineStore('media', () => {
           'Content-Type': 'application/json',
           ...authHeaders(),
         },
-        body: JSON.stringify(reviewData),
+        body: JSON.stringify({
+          mediaId: reviewData.mediaId,
+          mediaType: reviewData.mediaType || 'movie',
+          rating: reviewData.rating,
+          content: reviewData.content,
+        }),
       })
 
       const data = await res.json()
@@ -201,9 +253,20 @@ export const useMediaStore = defineStore('media', () => {
 
       const movie = movies.value.find(
         m => m.id === Number(reviewData.mediaId)
+          && m.type === (reviewData.mediaType || 'movie')
       )
 
-      if (movie) movie.reviewCount++
+      if (movie) {
+        const oldCount = Number(movie.reviewCount || 0)
+        movie.reviewCount = oldCount + 1
+        if (typeof movie.reviewAverage === 'number' && oldCount > 0) {
+          movie.reviewAverage = (
+            (movie.reviewAverage * oldCount) + Number(reviewData.rating)
+          ) / (oldCount + 1)
+        } else {
+          movie.reviewAverage = Number(reviewData.rating)
+        }
+      }
 
       return { success: true, review: data.review }
 
@@ -382,6 +445,7 @@ export const useMediaStore = defineStore('media', () => {
     loadPopular,
     search,
     loadDetail,
+    loadReviewStatsForMovies,
     resolveDetail,
 
     getMovieById,
