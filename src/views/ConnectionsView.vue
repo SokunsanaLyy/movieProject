@@ -169,7 +169,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import UserCard from '../components/UserCard.vue'
 
-const API = 'http://localhost:3000/api'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
 
 const route  = useRoute()
 const router = useRouter()

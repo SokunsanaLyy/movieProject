@@ -33,7 +33,7 @@ Located in folder named backend
 - 'cors' so the frontend can request the backend
 - 'dotenv' to load .env
 - 'prisma' + '@prisma/client' for database access
-- 'sqlite' via 'prisma' for local development
+- 'postgresql' via 'prisma' for database service on Render
 
 ## Backend flow
 

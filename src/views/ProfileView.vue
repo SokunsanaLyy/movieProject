@@ -427,7 +427,7 @@ import { fileToAvatarDataUrl } from '../utils/imageFile'
 import MediaCard from '../components/MediaCard.vue'
 import ReviewCard from '../components/ReviewCard.vue'
 
-const API = 'http://localhost:3000/api'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
 
 const route = useRoute()
 const auth  = useAuthStore()

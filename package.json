@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node backend/server.js",
+    "postinstall": "npm install --prefix backend",
     "dev:all": "concurrently -k -n frontend,backend -c cyan,magenta \"npm run dev\" \"npm run dev --prefix backend\"",
     "dev:stop": "sh -c 'for p in 3000 5173 5174; do lsof -ti :$p | xargs kill -9 2>/dev/null; done; echo Done — ports 3000, 5173, 5174 cleared'",
     "build": "vite build",

@@ -110,7 +110,8 @@ onMounted(async () => {
     if (!existing) {
       // Not in store (e.g. navigated from profile page) — fetch directly
       try {
-        const res = await fetch(`http://localhost:3000/api/reviews/${route.params.reviewId}`, {
+        const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
+        const res = await fetch(`${API}/reviews/${route.params.reviewId}`, {
           headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {},
         })
         if (res.ok) existing = await res.json()

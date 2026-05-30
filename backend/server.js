@@ -11,7 +11,12 @@ const prisma = new PrismaClient()
 const port = process.env.PORT || 3000
 const jwtSecret = process.env.JWT_SECRET || 'secret'
 
-app.use(cors())
+app.use(cors({
+  origin: [
+    'http://localhost:5173',           // local dev (Vite default)
+    'https://mercury.swin.edu.au',    // Mercury frontend URL
+  ]
+}))
 app.use(express.json({ limit: '2mb' }))
 
 function generateToken(user) {
