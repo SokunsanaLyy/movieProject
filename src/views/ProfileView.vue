@@ -420,51 +420,53 @@
 <script setup>
 import { computed, reactive, ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
-import { useMediaStore } from '../stores/media'
+import { useProfileStore } from '../stores/profile'
 import { avatarUrl } from '../utils/avatar'
 import { fileToAvatarDataUrl } from '../utils/imageFile'
 import MediaCard from '../components/MediaCard.vue'
 import ReviewCard from '../components/ReviewCard.vue'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
-
 const route = useRoute()
-const auth  = useAuthStore()
-const mediaStore = useMediaStore()
+const auth = useAuthStore()
+const profileStore = useProfileStore()
 
-function profileAuthHeaders() {
-  return auth.token ? { Authorization: `Bearer ${auth.token}` } : {}
-}
+const {
+  profile,
+  loading,
+  reviews,
+  reviewsLoading,
+  watchlistLoading,
+  followLoading,
+  pendingFollowRequests,
+  requestLoadingId,
+  watchlistMedia,
+  watchlistCount,
+} = storeToRefs(profileStore)
 
-// ── State ───────────────────────────────────────────────────────────
-// profile holds the response of GET /api/users/:username — user + stats
-// + isFollowing/isSelf flags. Null while the page is fetching or 404.
-const profile = ref(null)
-const loading = ref(true)
+const {
+  getMedia,
+  toggleFollow,
+  respondFollowRequest,
+  removeFromWatchlist,
+  deleteReview,
+  likeReview,
+  applyUserUpdate,
+} = profileStore
 
-const reviews          = ref([])
-const reviewsLoading   = ref(false)
-const watchlistItems   = ref([])
-const watchlistLoading = ref(false)
+const activeTab = ref(route.query.tab === 'watchlist' ? 'watchlist' : 'reviews')
 
-const activeTab    = ref(route.query.tab === 'watchlist' ? 'watchlist' : 'reviews')
-const followLoading = ref(false)
-const pendingFollowRequests = ref([])
-const requestLoadingId = ref(null)
-
-// Edit-profile modal state
-const editing    = ref(false)
+const editing = ref(false)
 const editSaving = ref(false)
-const editError  = ref('')
-const editForm   = reactive({ displayName: '', avatar: '', bio: '', isPrivate: false })
+const editError = ref('')
+const editForm = reactive({ displayName: '', avatar: '', bio: '', isPrivate: false })
 const visibilitySaving = ref(false)
 const avatarFieldRef = ref(null)
 const avatarFileInput = ref(null)
 const avatarFileInputModal = ref(null)
 const avatarUploading = ref(false)
 
-// Live preview when editing or right after a device upload (before save).
 const displayAvatar = computed(() => {
   if (!profile.value?.user) return ''
   const previewUser = {
@@ -477,241 +479,30 @@ const displayAvatar = computed(() => {
   return avatarUrl(profile.value.user, 240)
 })
 
-// ── Computed ────────────────────────────────────────────────────────
-// Format the createdAt timestamp into something readable (e.g. "May 2026")
 const joinDate = computed(() => {
   if (!profile.value?.user?.createdAt) return ''
   return new Date(profile.value.user.createdAt).toLocaleDateString('en-AU', {
     month: 'long',
-    year:  'numeric',
+    year: 'numeric',
   })
 })
 
-// Resolve watchlist {mediaId, type} rows into full TMDB movie objects.
-// Items whose TMDB detail couldn't be loaded are quietly dropped.
-const watchlistMedia = computed(() =>
-  watchlistItems.value
-    .map(item => mediaStore.getMovieById(item.mediaId, item.type))
-    .filter(Boolean)
-)
-
-const watchlistCount = computed(() => watchlistMedia.value.length)
-
-// Used by reviews tab to show the poster of each reviewed title.
-function getMedia(mediaId, type = 'movie') {
-  return mediaStore.getMovieById(mediaId, type)
-}
-
-// ── Data loading ────────────────────────────────────────────────────
-async function loadProfile() {
-  loading.value = true
-  try {
-    const res = await fetch(`${API}/users/${route.params.username}`, {
-      headers: profileAuthHeaders(),
-    })
-
-    if (!res.ok) {
-      profile.value = null
-      return
-    }
-
-    const data = await res.json()
-    profile.value = data
-    pendingFollowRequests.value = data.pendingFollowRequests || []
-  } catch (err) {
-    console.error('Profile load failed:', err)
-    profile.value = null
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadReviews() {
-  if (!profile.value?.canViewContent) {
-    reviews.value = []
-    return
-  }
-  reviewsLoading.value = true
-  try {
-    const res = await fetch(`${API}/users/${profile.value.user.username}/reviews`, {
-      headers: profileAuthHeaders(),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      reviews.value = []
-      return
-    }
-    reviews.value = (data.reviews || []).map(r => ({
-      ...r,
-      likes: r.likeCount ?? r.likes ?? 0,
-      liked: r.liked ?? false,
-    }))
-
-    // Hydrate TMDB detail for each reviewed title so we can show its poster.
-    // Errors are caught per-item so one bad fetch doesn't kill the list.
-    await Promise.all(
-      reviews.value.map(r =>
-        mediaStore.loadDetail(r.mediaId, r.mediaType || 'movie').catch(() => {})
-      )
-    )
-  } catch (err) {
-    console.error('Reviews load failed:', err)
-    reviews.value = []
-  } finally {
-    reviewsLoading.value = false
-  }
-}
-
 async function handleDeleteReview(reviewId) {
   if (!confirm('Delete this review? This cannot be undone.')) return
-  try {
-    const res = await fetch(`${API}/reviews/${reviewId}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
-      },
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      alert(data.error || 'Could not delete review.')
-      return
-    }
-    reviews.value = reviews.value.filter(r => r.id !== reviewId)
-  } catch (err) {
-    console.error('Delete review error:', err)
-    alert('Could not reach the server. Please try again.')
-  }
+  const result = await deleteReview(reviewId)
+  if (!result.success) alert(result.error)
 }
 
 function handleLikeReview(reviewId) {
-  if (!auth.isAuthenticated) return
-  const review = reviews.value.find(r => r.id === Number(reviewId))
-  if (!review) return
-  if (!review._likedBy) review._likedBy = []
-  const alreadyLiked = review._likedBy.includes(auth.user.id)
-  if (alreadyLiked) {
-    review._likedBy = review._likedBy.filter(id => id !== auth.user.id)
-    review.likes = Math.max(0, (review.likes || 0) - 1)
-    review.liked = false
-  } else {
-    review._likedBy.push(auth.user.id)
-    review.likes = (review.likes || 0) + 1
-    review.liked = true
-  }
-}
-
-async function loadWatchlist() {
-  if (!profile.value?.canViewContent) {
-    watchlistItems.value = []
-    return
-  }
-  watchlistLoading.value = true
-  try {
-    const res = await fetch(`${API}/users/${profile.value.user.username}/watchlist`, {
-      headers: profileAuthHeaders(),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      watchlistItems.value = []
-      return
-    }
-    watchlistItems.value = (data.watchlist || []).map(item => ({
-      mediaId: Number(item.mediaId),
-      type:    item.type || 'movie',
-    }))
-
-    // Hydrate TMDB detail for each item so MediaCard has poster/title/etc.
-    await Promise.all(
-      watchlistItems.value.map(item =>
-        mediaStore.loadDetail(item.mediaId, item.type).catch(() => {})
-      )
-    )
-  } catch (err) {
-    console.error('Watchlist load failed:', err)
-    watchlistItems.value = []
-  } finally {
-    watchlistLoading.value = false
-  }
-}
-
-async function removeFromWatchlist(media) {
-  if (!profile.value?.isSelf || !auth.isAuthenticated) return
-  await mediaStore.toggleWatchlist(media.id, media.type || 'movie')
-  watchlistItems.value = watchlistItems.value.filter(item => item.mediaId !== media.id)
-}
-
-// ── Actions ─────────────────────────────────────────────────────────
-async function toggleFollow() {
-  if (!auth.isAuthenticated || !profile.value || profile.value.isSelf) return
-  followLoading.value = true
-  const wasFollowing = profile.value.isFollowing
-  try {
-    const res = await fetch(`${API}/users/${profile.value.user.username}/follow`, {
-      method:  'POST',
-      headers: { Authorization: `Bearer ${auth.token}` },
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      alert(data.error || 'Could not update follow.')
-      return
-    }
-    profile.value.isFollowing = !!data.isFollowing
-    profile.value.followRequestPending = !!data.followRequestPending
-
-    if (wasFollowing && !data.isFollowing) {
-      profile.value.stats.followers = Math.max(0, profile.value.stats.followers - 1)
-      if (profile.value.user.isPrivate) {
-        profile.value.canViewContent = false
-        reviews.value = []
-        watchlistItems.value = []
-      }
-    } else if (!wasFollowing && data.isFollowing) {
-      profile.value.stats.followers += 1
-      profile.value.canViewContent = true
-      await Promise.all([loadReviews(), loadWatchlist()])
-    }
-  } catch (err) {
-    console.error('Follow toggle failed:', err)
-  } finally {
-    followLoading.value = false
-  }
-}
-
-async function respondFollowRequest(followerId, action) {
-  if (!profile.value?.isSelf || !auth.token) return
-  requestLoadingId.value = followerId
-  try {
-    const res = await fetch(`${API}/users/me/follow-requests/${followerId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.token}`,
-      },
-      body: JSON.stringify({ action }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      alert(data.error || 'Could not update follow request.')
-      return
-    }
-    pendingFollowRequests.value = pendingFollowRequests.value.filter(r => r.followerId !== followerId)
-    if (action === 'accept') {
-      profile.value.stats.followers += 1
-    }
-  } catch (err) {
-    console.error('Follow request response failed:', err)
-  } finally {
-    requestLoadingId.value = null
-  }
+  likeReview(reviewId)
 }
 
 function openEdit() {
   if (!profile.value?.isSelf) return
   editForm.displayName = profile.value.user.displayName || ''
-  editForm.avatar      = profile.value.user.avatar      || ''
-  editForm.bio         = profile.value.user.bio         || ''
-  editForm.isPrivate   = !!profile.value.user.isPrivate
+  editForm.avatar = profile.value.user.avatar || ''
+  editForm.bio = profile.value.user.bio || ''
+  editForm.isPrivate = !!profile.value.user.isPrivate
   editError.value = ''
   editing.value = true
 }
@@ -725,15 +516,12 @@ async function setProfileVisibility(isPrivate) {
     alert(result.error || 'Could not update visibility.')
     return
   }
-  profile.value.user.isPrivate = !!result.user.isPrivate
-  profile.value.canViewContent = true
+  applyUserUpdate(result.user)
   editForm.isPrivate = profile.value.user.isPrivate
 }
 
 function pickAvatarFile() {
-  const input = editing.value
-    ? avatarFileInputModal.value
-    : avatarFileInput.value
+  const input = editing.value ? avatarFileInputModal.value : avatarFileInput.value
   input?.click()
 }
 
@@ -771,9 +559,9 @@ async function submitEdit() {
 
   const result = await auth.updateProfile({
     displayName: editForm.displayName,
-    avatar:      editForm.avatar,
-    bio:         editForm.bio,
-    isPrivate:   editForm.isPrivate,
+    avatar: editForm.avatar,
+    bio: editForm.bio,
+    isPrivate: editForm.isPrivate,
   })
 
   editSaving.value = false
@@ -783,35 +571,20 @@ async function submitEdit() {
     return
   }
 
-  // Mirror the changes onto the local profile object so the header updates
-  // immediately without another network round-trip.
-  profile.value.user = { ...profile.value.user, ...result.user }
-  profile.value.canViewContent = true
+  applyUserUpdate(result.user)
   editing.value = false
 }
 
-// ── Lifecycle ───────────────────────────────────────────────────────
-onMounted(async () => {
-  await loadProfile()
-  if (profile.value) {
-    await Promise.all([loadReviews(), loadWatchlist()])
-  }
-})
+onMounted(() => profileStore.loadAll(route.params.username))
 
-// Re-fetch everything when the route :username changes (e.g. from another
-// profile in the followers list).
 watch(
   () => route.params.username,
-  async (newName, oldName) => {
+  (newName, oldName) => {
     if (!newName || newName === oldName) return
-    await loadProfile()
-    if (profile.value) {
-      await Promise.all([loadReviews(), loadWatchlist()])
-    }
+    profileStore.loadAll(newName)
   }
 )
 
-// Sync tab to ?tab= query so deep links work.
 watch(
   () => route.query.tab,
   (newTab) => {
