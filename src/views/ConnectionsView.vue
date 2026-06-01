@@ -164,203 +164,63 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
+import { useConnectionsStore } from '../stores/connections'
 import UserCard from '../components/UserCard.vue'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
-
-const route  = useRoute()
+const route = useRoute()
 const router = useRouter()
-const auth   = useAuthStore()
+const auth = useAuthStore()
+const connectionsStore = useConnectionsStore()
 
-// ── State ───────────────────────────────────────────────────────────
-const followers = ref([])
-const following = ref([])
-const loading   = ref(true)
-const profilePrivate = ref(false)
-const pendingId = ref(null) // user id whose follow toggle is in-flight
-const search    = ref('')
+const {
+  followers,
+  following,
+  loading,
+  profilePrivate,
+  pendingId,
+  search,
+  globalLoading,
+  activeTab,
+  trimmedSearch,
+  usersForTab,
+  filteredUsers,
+  discoverUsers,
+} = storeToRefs(connectionsStore)
 
-// Global search across all platform users (Discover section)
-const globalResults = ref([])
-const globalLoading = ref(false)
+const { toggleFollow } = connectionsStore
 
-// `activeTab` mirrors the `?tab=` query string so deep links work and
-// users can switch tabs by URL too.
-const activeTab = ref(route.query.tab === 'following' ? 'following' : 'followers')
-
-// ── Computed ────────────────────────────────────────────────────────
-const trimmedSearch = computed(() => search.value.trim())
-
-const usersForTab = computed(() =>
-  activeTab.value === 'followers' ? followers.value : following.value
+connectionsStore.syncTabFromQuery(
+  route.query.tab === 'following' ? 'following' : 'followers'
 )
 
-const filteredUsers = computed(() => {
-  if (!trimmedSearch.value) return usersForTab.value
-  const q = trimmedSearch.value.toLowerCase()
-  return usersForTab.value.filter(u =>
-    u.displayName.toLowerCase().includes(q) ||
-    u.username.toLowerCase().includes(q)
-  )
-})
-
-// "Discover" only shows users not already in the current tab so the page
-// doesn't duplicate cards above and below the divider.
-const discoverUsers = computed(() => {
-  if (!trimmedSearch.value) return []
-  const visibleIds = new Set(filteredUsers.value.map(u => u.id))
-  return globalResults.value.filter(u => !visibleIds.has(u.id))
-})
-
-// ── Data loading ────────────────────────────────────────────────────
-// Both lists are loaded up-front so flipping tabs is instant and the
-// "Followers (N) | Following (N)" counts always render correctly.
-async function loadConnections() {
-  loading.value = true
-  profilePrivate.value = false
-  try {
-    const headers = auth.token ? { Authorization: `Bearer ${auth.token}` } : {}
-
-    const [followersRes, followingRes] = await Promise.all([
-      fetch(`${API}/users/${route.params.username}/followers`, { headers }),
-      fetch(`${API}/users/${route.params.username}/following`, { headers }),
-    ])
-
-    if (followersRes.status === 403 || followingRes.status === 403) {
-      profilePrivate.value = true
-      followers.value = []
-      following.value = []
-      return
-    }
-
-    if (!followersRes.ok || !followingRes.ok) {
-      followers.value = []
-      following.value = []
-      return
-    }
-
-    const [fa, fb] = await Promise.all([followersRes.json(), followingRes.json()])
-    followers.value = fa.users || []
-    following.value = fb.users || []
-  } catch (err) {
-    console.error('Connections load failed:', err)
-    followers.value = []
-    following.value = []
-  } finally {
-    loading.value = false
-  }
-}
-
-// Platform-wide user search.
-// Debounced so we don't fire a request on every keystroke. Cancellable via
-// the `requestId` token so a slow earlier response can't overwrite a faster
-// later one.
-let searchTimer = null
-let requestId   = 0
-
-function runGlobalSearch(q) {
-  const myId = ++requestId
-  globalLoading.value = true
-
-  const url = `${API}/users?q=${encodeURIComponent(q)}&limit=12`
-  const headers = auth.token ? { Authorization: `Bearer ${auth.token}` } : {}
-
-  fetch(url, { headers })
-    .then(res => res.ok ? res.json() : { users: [] })
-    .then(data => {
-      if (myId !== requestId) return // a newer search has superseded us
-      globalResults.value = data.users || []
-    })
-    .catch(err => {
-      console.error('User search failed:', err)
-      if (myId === requestId) globalResults.value = []
-    })
-    .finally(() => {
-      if (myId === requestId) globalLoading.value = false
-    })
-}
-
-watch(trimmedSearch, (q) => {
-  if (searchTimer) clearTimeout(searchTimer)
-
-  if (!q) {
-    // Empty box → drop any in-flight result; nothing to show in Discover.
-    requestId++
-    globalResults.value = []
-    globalLoading.value = false
-    return
-  }
-
-  // 250ms debounce feels responsive without spamming the backend.
-  searchTimer = setTimeout(() => runGlobalSearch(q), 250)
-})
-
-onUnmounted(() => {
-  if (searchTimer) clearTimeout(searchTimer)
-})
-
-// ── Actions ─────────────────────────────────────────────────────────
 function setTab(name) {
-  activeTab.value = name
-  // Update the URL so refreshing keeps the same tab and shareable links work.
-  router.replace({
-    query: { ...route.query, tab: name },
-  })
+  connectionsStore.setActiveTab(name)
+  router.replace({ query: { ...route.query, tab: name } })
 }
 
-// Toggle follow on a user shown in either list. The user object is the
-// same reference in followers/following arrays, so flipping `isFollowing`
-// updates both views without a refetch.
-async function toggleFollow(user) {
-  if (!auth.isAuthenticated || user.id === auth.user?.id) return
-  pendingId.value = user.id
-  try {
-    const res = await fetch(`${API}/users/${user.username}/follow`, {
-      method:  'POST',
-      headers: { Authorization: `Bearer ${auth.token}` },
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      alert(data.error || 'Could not update follow.')
-      return
+watch(trimmedSearch, (q) => connectionsStore.onSearchChange(q))
+
+onMounted(() => connectionsStore.loadConnections(route.params.username))
+
+onUnmounted(() => connectionsStore.clearSearchTimer())
+
+watch(
+  () => route.params.username,
+  (newName, oldName) => {
+    if (newName && newName !== oldName) {
+      connectionsStore.loadConnections(newName)
     }
-
-    // Flip the flag everywhere this user appears.
-    updateUserEverywhere(user.id, {
-      isFollowing: !!data.isFollowing,
-      followRequestPending: !!data.followRequestPending,
-    })
-  } catch (err) {
-    console.error('Follow toggle failed:', err)
-  } finally {
-    pendingId.value = null
   }
-}
+)
 
-function updateUserEverywhere(userId, patch) {
-  // Also update the Discover list so a user followed from there flips state
-  // without needing a refetch.
-  for (const list of [followers.value, following.value, globalResults.value]) {
-    const found = list.find(u => u.id === userId)
-    if (found) Object.assign(found, patch)
-  }
-}
-
-// ── Lifecycle ───────────────────────────────────────────────────────
-onMounted(loadConnections)
-
-watch(() => route.params.username, (newName, oldName) => {
-  if (newName && newName !== oldName) loadConnections()
-})
-
-watch(() => route.query.tab, (newTab) => {
-  if (newTab === 'followers' || newTab === 'following') {
-    activeTab.value = newTab
-  }
-})
+watch(
+  () => route.query.tab,
+  (newTab) => connectionsStore.syncTabFromQuery(newTab)
+)
 </script>
 
 <style scoped>
